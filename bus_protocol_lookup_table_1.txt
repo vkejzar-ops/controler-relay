@@ -1,0 +1,110 @@
+BUS PROTOCOL — FULL DECODE REFERENCE
+=====================================
+
+NORMALIZATION
+-------------
+Raw Saleae pulse durations (seconds) are converted to integer "symbols" by
+dividing each pulse duration by the base unit:
+
+    base_unit = 0.000416 seconds
+
+    symbol = round(pulse_duration / base_unit)
+
+FRAME HEADER (fixed, present on every frame)
+---------------------------------------------
+16 symbols, always identical:
+
+    [2, 1, 1, 2, 1, 1, 1, 1, 9, 1, 1, 9, 2, 1, 6, 1]
+
+FRAME BODY — 6 SLOTS
+---------------------
+After the header, the body is made of exactly 6 "slots". Each slot
+represents one PAIR of buttons:
+
+    Slot 1 -> buttons 1  and 2
+    Slot 2 -> buttons 3  and 4
+    Slot 3 -> buttons 5  and 6
+    Slot 4 -> buttons 7  and 8
+    Slot 5 -> buttons 9  and 10
+    Slot 6 -> buttons 11 and 12
+
+Each slot can be in exactly ONE of 4 states, each with its own fixed
+symbol pattern:
+
+    NEUTRAL   (neither button in the pair is pressed)
+        symbols: [9, 1]                     (2 symbols)
+
+    ODD       (the odd-numbered button of the pair is pressed
+               e.g. slot 1 odd = button 1, slot 2 odd = button 3, etc.)
+        symbols: [5, 1, 3, 1]               (4 symbols)
+
+    EVEN      (the even-numbered button of the pair is pressed
+               e.g. slot 1 even = button 2, slot 2 even = button 4, etc.)
+        symbols: [1, 1, 7, 1]               (4 symbols)
+
+    BOTH_HELD (both buttons of the pair are pressed simultaneously)
+        symbols: [1, 1, 3, 1, 3, 1]         (6 symbols)
+
+A full frame body is just these 6 slot-patterns concatenated in slot
+order (slot 1 first, slot 6 last), based on whatever the CURRENT state
+of each pair is. There is no dependency between slots — each is fully
+independent based only on current button state.
+
+TAIL BYTES
+----------
+After the 6 slots there is a short tail (varies, likely checksum/parity/
+end marker — not yet fully reverse engineered). Observed tails so far:
+
+    All slots neutral (idle/all-off):        [1, 2, 1, 2, 1, 1, 1]
+    Ends on an ODD-active slot:               [1, 2, 1, 1, 1, 2, 1]
+    Ends on an EVEN-active slot:              [3, 3, 1, 1, 1]
+    (other combinations observed but tail formula not yet solved —
+     if you need exact tail bytes for combinations beyond what's been
+     captured, run a real capture of that combination and I can extend
+     this table.)
+
+    RECOMMENDATION for the Arduino bridge: since the tail's exact rule
+    isn't nailed down yet, the safest approach is to always pass through
+    a real captured frame's tail when you have one, or treat the tail
+    as "whatever the panel itself sends for that same active-slot
+    combination" rather than trying to compute it from scratch until
+    we solve it fully.
+
+HOW TO BUILD A FRAME FOR ANY BUTTON COMBINATION
+-------------------------------------------------
+1. Start with the 16-symbol header (always identical).
+2. For each of the 6 slots (in order 1 to 6):
+     - if neither button of that pair is pressed -> emit NEUTRAL pattern
+     - if only the odd button of the pair is pressed -> emit ODD pattern
+     - if only the even button of the pair is pressed -> emit EVEN pattern
+     - if both buttons of the pair are pressed -> emit BOTH_HELD pattern
+3. Append the appropriate tail (see caveat above).
+4. Convert each integer symbol back into a real pulse duration by
+   multiplying by the base unit (0.000416 seconds) to get the timing
+   Arduino should actually use when driving the bus line.
+
+WORKED EXAMPLE
+--------------
+Buttons 2, 7, and 10 held (validated against a real blind-test capture):
+
+    Slot 1 (1,2)   -> button 2 active  -> EVEN    -> [1,1,7,1]
+    Slot 2 (3,4)   -> neither          -> NEUTRAL -> [9,1]
+    Slot 3 (5,6)   -> neither          -> NEUTRAL -> [9,1]
+    Slot 4 (7,8)   -> button 7 active  -> ODD     -> [5,1,3,1]
+    Slot 5 (9,10)  -> button 10 active -> EVEN    -> [1,1,7,1]
+    Slot 6 (11,12) -> neither          -> NEUTRAL -> [9,1]
+
+    Full body = [1,1,7,1, 9,1, 9,1, 5,1,3,1, 1,1,7,1, 9,1]
+    Full frame = HEADER + body + tail
+
+STATUS / OPEN ITEMS
+--------------------
+- Confirmed working against: all 12 solo button ON/OFF frames, a 4-button
+  simultaneous-hold sequence (12,11,10,9 then 1,2,3,4), and a blind test
+  (press 2, press 7, press 10, release 7) — decoder correctly identified
+  every state transition including a mid-sequence release.
+- NOT yet solved: exact tail-byte formula for arbitrary combinations.
+- NOT yet built: Arduino/ESP32 code to actually construct and transmit
+  these pulse trains, and the passive listen+relay logic for the bridge
+  architecture (panel -> Arduino -> receiver, no direct panel-receiver
+  connection).
