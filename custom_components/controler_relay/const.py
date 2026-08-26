@@ -5,6 +5,10 @@ DOMAIN = "controler_relay"
 CONF_BAUD_RATE = "baud_rate"
 DEFAULT_BAUD_RATE = 115200
 
+CONF_PANEL_COUNT = "panel_count"
+DEFAULT_PANEL_COUNT = 1
+MAX_PANELS = 2
+
 NUM_BUTTONS = 12
 NUM_SLOTS = 6
 
@@ -12,6 +16,7 @@ MSG_TYPE_STATE = "state"
 MSG_TYPE_SET_BUTTON = "set_button"
 MSG_TYPE_SET_MASTER = "set_master"
 MSG_TYPE_GET_STATE = "get_state"
+MSG_FIELD_PANEL = "panel"
 
 SLOT_NEUTRAL = "neutral"
 SLOT_ODD = "odd"

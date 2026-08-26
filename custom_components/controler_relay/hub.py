@@ -2,8 +2,12 @@
 
 Speaks the newline-delimited JSON protocol documented in PROTOCOL.md at
 the repo root. Owns the connection lifecycle (connect, read loop,
-reconnect-with-backoff) and exposes the last-known panel state plus a
-simple listener callback for entities to subscribe to updates.
+reconnect-with-backoff) and exposes the last-known state per panel plus
+a simple listener callback for entities to subscribe to updates.
+
+The device can bridge up to MAX_PANELS independent panels sharing one
+UART link; every message carries a 1-based "panel" field. Only
+`panel_count` of them are tracked/requested by this hub instance.
 """
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ from collections.abc import Callable
 import serial_asyncio_fast as serial_asyncio
 
 from .const import (
+    MSG_FIELD_PANEL,
     MSG_TYPE_GET_STATE,
     MSG_TYPE_SET_BUTTON,
     MSG_TYPE_SET_MASTER,
@@ -31,18 +36,25 @@ _LOGGER = logging.getLogger(__name__)
 class ControlerRelayHub:
     """Manages the UART connection to the ESP32 bridge."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, port: str, baud_rate: int) -> None:
+    def __init__(
+        self, loop: asyncio.AbstractEventLoop, port: str, baud_rate: int, panel_count: int
+    ) -> None:
         self._loop = loop
         self._port = port
         self._baud_rate = baud_rate
+        self.panel_count = panel_count
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._read_task: asyncio.Task | None = None
         self._closing = False
 
         self.available = False
-        self.master_state: bool | None = None
-        self.slot_states: list[str] = [VALID_SLOT_STATES[0]] * NUM_SLOTS
+        self.master_state: dict[int, bool | None] = {
+            panel: None for panel in range(1, panel_count + 1)
+        }
+        self.slot_states: dict[int, list[str]] = {
+            panel: [VALID_SLOT_STATES[0]] * NUM_SLOTS for panel in range(1, panel_count + 1)
+        }
 
         self._listeners: list[Callable[[], None]] = []
 
@@ -60,13 +72,13 @@ class ControlerRelayHub:
         for callback in list(self._listeners):
             callback()
 
-    def is_button_on(self, button: int) -> bool | None:
-        """Return the current on/off state for a 1-12 button, or None if unknown."""
-        if self.master_state is None:
+    def is_button_on(self, panel: int, button: int) -> bool | None:
+        """Return the current on/off state for a 1-12 button on the given panel."""
+        if self.master_state[panel] is None:
             return None
         slot_index = (button - 1) // 2
         is_odd_button = (button - 1) % 2 == 0
-        state = self.slot_states[slot_index]
+        state = self.slot_states[panel][slot_index]
         if is_odd_button:
             return state in ("odd", "held")
         return state in ("even", "held")
@@ -82,7 +94,8 @@ class ControlerRelayHub:
             url=self._port, baudrate=self._baud_rate
         )
         self.available = True
-        await self._async_send({"t": MSG_TYPE_GET_STATE})
+        for panel in range(1, self.panel_count + 1):
+            await self._async_send({"t": MSG_TYPE_GET_STATE, MSG_FIELD_PANEL: panel})
         self._notify()
 
     async def async_close(self) -> None:
@@ -147,19 +160,21 @@ class ControlerRelayHub:
         if msg.get("t") != MSG_TYPE_STATE:
             return
 
+        panel = msg.get(MSG_FIELD_PANEL)
         slots = msg.get("slots")
         master = msg.get("master")
         if (
-            not isinstance(slots, list)
+            panel not in self.master_state
+            or not isinstance(slots, list)
             or len(slots) != NUM_SLOTS
             or any(s not in VALID_SLOT_STATES for s in slots)
             or not isinstance(master, bool)
         ):
-            _LOGGER.warning("Ignoring malformed state message from ESP32: %r", msg)
+            _LOGGER.warning("Ignoring malformed/unconfigured-panel state message: %r", msg)
             return
 
-        self.master_state = master
-        self.slot_states = list(slots)
+        self.master_state[panel] = master
+        self.slot_states[panel] = list(slots)
         self.available = True
         self._notify()
 
@@ -169,8 +184,10 @@ class ControlerRelayHub:
         self._writer.write((json.dumps(message) + "\n").encode("utf-8"))
         await self._writer.drain()
 
-    async def async_set_button(self, button: int, on: bool) -> None:
-        await self._async_send({"t": MSG_TYPE_SET_BUTTON, "button": button, "on": on})
+    async def async_set_button(self, panel: int, button: int, on: bool) -> None:
+        await self._async_send(
+            {"t": MSG_TYPE_SET_BUTTON, MSG_FIELD_PANEL: panel, "button": button, "on": on}
+        )
 
-    async def async_set_master(self, on: bool) -> None:
-        await self._async_send({"t": MSG_TYPE_SET_MASTER, "on": on})
+    async def async_set_master(self, panel: int, on: bool) -> None:
+        await self._async_send({"t": MSG_TYPE_SET_MASTER, MSG_FIELD_PANEL: panel, "on": on})

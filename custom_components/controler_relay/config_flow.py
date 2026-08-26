@@ -11,7 +11,14 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_PORT
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import CONF_BAUD_RATE, DEFAULT_BAUD_RATE, DOMAIN
+from .const import (
+    CONF_BAUD_RATE,
+    CONF_PANEL_COUNT,
+    DEFAULT_BAUD_RATE,
+    DEFAULT_PANEL_COUNT,
+    DOMAIN,
+    MAX_PANELS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,6 +26,9 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_PORT, default="/dev/ttyAMA0"): str,
         vol.Required(CONF_BAUD_RATE, default=DEFAULT_BAUD_RATE): int,
+        vol.Required(CONF_PANEL_COUNT, default=DEFAULT_PANEL_COUNT): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=MAX_PANELS)
+        ),
     }
 )
 

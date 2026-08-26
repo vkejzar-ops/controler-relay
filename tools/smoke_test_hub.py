@@ -44,7 +44,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from mock_esp32 import MockPanel, handle_line  # noqa: E402
 
 
-async def run_mock_device(master_fd: int, panel: MockPanel) -> None:
+async def run_mock_device(master_fd: int, panel_state: MockPanel) -> None:
     loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
@@ -60,7 +60,7 @@ async def run_mock_device(master_fd: int, panel: MockPanel) -> None:
             line = await reader.readline()
             if not line:
                 break
-            await handle_line(panel, line.decode("utf-8", errors="ignore"), write)
+            await handle_line(panel_state, line.decode("utf-8", errors="ignore"), write)
     except asyncio.CancelledError:
         pass
     finally:
@@ -72,50 +72,62 @@ async def main() -> None:
     device_path = os.ttyname(slave_fd)
     os.set_blocking(master_fd, False)
 
-    panel = MockPanel()
-    device_task = asyncio.get_running_loop().create_task(run_mock_device(master_fd, panel))
+    panel_state = MockPanel()
+    device_task = asyncio.get_running_loop().create_task(run_mock_device(master_fd, panel_state))
 
-    hub = ControlerRelayHub(asyncio.get_running_loop(), device_path, 115200)
+    # panel_count=2 even though only panel 1 is physically wired up yet --
+    # this proves the two panels' state stays isolated in the hub.
+    hub = ControlerRelayHub(asyncio.get_running_loop(), device_path, 115200, panel_count=2)
     await hub.async_connect()
 
-    # Let the initial get_state/state round trip settle.
+    # Let the initial get_state/state round trip settle for both panels.
     await asyncio.sleep(0.2)
-    assert hub.master_state is True, f"expected initial master True, got {hub.master_state}"
-    assert hub.slot_states == ["neutral"] * 6, hub.slot_states
-    assert hub.is_button_on(1) is False
-    print("PASS: initial state received")
+    assert hub.master_state[1] is True, f"expected initial panel 1 master True, got {hub.master_state}"
+    assert hub.master_state[2] is True, f"expected initial panel 2 master True, got {hub.master_state}"
+    assert hub.slot_states[1] == ["neutral"] * 6, hub.slot_states[1]
+    assert hub.is_button_on(1, 1) is False
+    print("PASS: initial state received for both panels")
 
-    # Turn button 7 on (odd button of slot 4) -> slot should become "odd".
-    await hub.async_set_button(7, True)
+    # Turn button 7 on panel 1 (odd button of slot 4) -> slot should become "odd".
+    await hub.async_set_button(1, 7, True)
     await asyncio.sleep(0.2)
-    assert hub.slot_states[3] == "odd", hub.slot_states
-    assert hub.is_button_on(7) is True
-    print("PASS: set_button(7, True) -> slot 4 = odd")
+    assert hub.slot_states[1][3] == "odd", hub.slot_states[1]
+    assert hub.is_button_on(1, 7) is True
+    assert hub.slot_states[2][3] == "neutral", "panel 2 must be unaffected by panel 1 command"
+    print("PASS: set_button(1, 7, True) -> panel 1 slot 4 = odd, panel 2 untouched")
 
     # Turn button 8 on too (even button of slot 4) -> slot should become "held".
-    await hub.async_set_button(8, True)
+    await hub.async_set_button(1, 8, True)
     await asyncio.sleep(0.2)
-    assert hub.slot_states[3] == "held", hub.slot_states
-    assert hub.is_button_on(7) is True
-    assert hub.is_button_on(8) is True
-    print("PASS: set_button(8, True) -> slot 4 = held")
+    assert hub.slot_states[1][3] == "held", hub.slot_states[1]
+    assert hub.is_button_on(1, 7) is True
+    assert hub.is_button_on(1, 8) is True
+    print("PASS: set_button(1, 8, True) -> panel 1 slot 4 = held")
 
     # Turn button 7 back off -> slot should become "even" (only 8 held).
-    await hub.async_set_button(7, False)
+    await hub.async_set_button(1, 7, False)
     await asyncio.sleep(0.2)
-    assert hub.slot_states[3] == "even", hub.slot_states
-    print("PASS: set_button(7, False) -> slot 4 = even")
+    assert hub.slot_states[1][3] == "even", hub.slot_states[1]
+    print("PASS: set_button(1, 7, False) -> panel 1 slot 4 = even")
 
-    # Master off/on round trip.
-    await hub.async_set_master(False)
+    # Panel 2 command affects only panel 2.
+    await hub.async_set_button(2, 3, True)
     await asyncio.sleep(0.2)
-    assert hub.master_state is False
-    print("PASS: set_master(False)")
+    assert hub.slot_states[2][1] == "odd", hub.slot_states[2]
+    assert hub.slot_states[1][3] == "even", "panel 1 must be unaffected by panel 2 command"
+    print("PASS: set_button(2, 3, True) -> panel 2 slot 2 = odd, panel 1 untouched")
 
-    await hub.async_set_master(True)
+    # Master off/on round trip, panel 1 only.
+    await hub.async_set_master(1, False)
     await asyncio.sleep(0.2)
-    assert hub.master_state is True
-    print("PASS: set_master(True)")
+    assert hub.master_state[1] is False
+    assert hub.master_state[2] is True, "panel 2 master must be unaffected by panel 1 command"
+    print("PASS: set_master(1, False)")
+
+    await hub.async_set_master(1, True)
+    await asyncio.sleep(0.2)
+    assert hub.master_state[1] is True
+    print("PASS: set_master(1, True)")
 
     await hub.async_close()
     device_task.cancel()

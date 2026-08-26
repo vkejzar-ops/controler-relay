@@ -6,7 +6,8 @@
         "description": "Enter the serial device the ESP32 bridge's UART TX/RX pins are wired to.",
         "data": {
           "port": "Serial port",
-          "baud_rate": "Baud rate"
+          "baud_rate": "Baud rate",
+          "panel_count": "Number of panels connected (1 or 2)"
         }
       }
     },

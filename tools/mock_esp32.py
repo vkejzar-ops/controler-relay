@@ -4,9 +4,10 @@ without real hardware.
 
 Creates a pty pair, prints the path of the "device" side (point the HA
 config flow's serial port at it), and speaks the protocol documented in
-PROTOCOL.md: tracks 6 slot states + master state in memory, responds to
-get_state/set_button/set_master, and pushes a state update after every
-change -- exactly what the real ESP32 firmware is expected to do.
+PROTOCOL.md: tracks 6 slot states + master state per panel (up to
+MAX_PANELS) in memory, responds to get_state/set_button/set_master, and
+pushes a state update after every change -- exactly what the real ESP32
+firmware is expected to do.
 
 Usage:
     python3 tools/mock_esp32.py [--link /tmp/controler_relay_mock_tty]
@@ -23,23 +24,34 @@ import pty
 _LOGGER = logging.getLogger("mock_esp32")
 
 NUM_SLOTS = 6
+MAX_PANELS = 2
 
 
 class MockPanel:
+    """Tracks state for every panel the mock device pretends to bridge."""
+
     def __init__(self) -> None:
-        self.master_state = True
-        self.slot_states = ["neutral"] * NUM_SLOTS
+        self.master_state = {panel: True for panel in range(1, MAX_PANELS + 1)}
+        self.slot_states = {panel: ["neutral"] * NUM_SLOTS for panel in range(1, MAX_PANELS + 1)}
 
-    def state_message(self) -> dict:
-        return {"t": "state", "master": self.master_state, "slots": list(self.slot_states)}
+    def state_message(self, panel: int) -> dict:
+        return {
+            "t": "state",
+            "panel": panel,
+            "master": self.master_state[panel],
+            "slots": list(self.slot_states[panel]),
+        }
 
-    def set_button(self, button: int, on: bool) -> None:
+    def set_button(self, panel: int, button: int, on: bool) -> None:
+        if panel not in self.master_state:
+            _LOGGER.warning("Ignoring command for unknown panel %s", panel)
+            return
         if not 1 <= button <= 12:
             _LOGGER.warning("Ignoring set_button for out-of-range button %s", button)
             return
         slot_index = (button - 1) // 2
         is_odd_button = (button - 1) % 2 == 0
-        state = self.slot_states[slot_index]
+        state = self.slot_states[panel][slot_index]
         odd_on = state in ("odd", "held")
         even_on = state in ("even", "held")
         if is_odd_button:
@@ -54,13 +66,16 @@ class MockPanel:
             new_state = "even"
         else:
             new_state = "neutral"
-        self.slot_states[slot_index] = new_state
+        self.slot_states[panel][slot_index] = new_state
 
-    def set_master(self, on: bool) -> None:
-        self.master_state = on
+    def set_master(self, panel: int, on: bool) -> None:
+        if panel not in self.master_state:
+            _LOGGER.warning("Ignoring command for unknown panel %s", panel)
+            return
+        self.master_state[panel] = on
 
 
-async def handle_line(panel: MockPanel, line: str, write) -> None:
+async def handle_line(panel_state: MockPanel, line: str, write) -> None:
     line = line.strip()
     if not line:
         return
@@ -71,16 +86,21 @@ async def handle_line(panel: MockPanel, line: str, write) -> None:
         return
 
     msg_type = msg.get("t")
+    panel = msg.get("panel")
     _LOGGER.info("<- %s", msg)
 
+    if panel not in panel_state.master_state:
+        _LOGGER.warning("Ignoring message for unknown panel: %r", msg)
+        return
+
     if msg_type == "get_state":
-        write(panel.state_message())
+        write(panel_state.state_message(panel))
     elif msg_type == "set_button":
-        panel.set_button(msg.get("button"), bool(msg.get("on")))
-        write(panel.state_message())
+        panel_state.set_button(panel, msg.get("button"), bool(msg.get("on")))
+        write(panel_state.state_message(panel))
     elif msg_type == "set_master":
-        panel.set_master(bool(msg.get("on")))
-        write(panel.state_message())
+        panel_state.set_master(panel, bool(msg.get("on")))
+        write(panel_state.state_message(panel))
     else:
         _LOGGER.warning("Unknown message type from host: %r", msg_type)
 
@@ -98,7 +118,7 @@ async def async_main(link_path: str | None) -> None:
     else:
         print(f"Mock ESP32 listening. Point Home Assistant's serial port at: {device_path}")
 
-    panel = MockPanel()
+    panel_state = MockPanel()
     loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
@@ -114,7 +134,7 @@ async def async_main(link_path: str | None) -> None:
             line = await reader.readline()
             if not line:
                 break
-            await handle_line(panel, line.decode("utf-8", errors="ignore"), write)
+            await handle_line(panel_state, line.decode("utf-8", errors="ignore"), write)
     finally:
         transport.close()
         os.close(slave_fd)

@@ -5,7 +5,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PORT, Platform
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_BAUD_RATE, DOMAIN
+from .const import CONF_BAUD_RATE, CONF_PANEL_COUNT, DEFAULT_PANEL_COUNT, DOMAIN
 from .hub import ControlerRelayHub
 
 PLATFORMS: list[Platform] = [Platform.SWITCH]
@@ -14,7 +14,10 @@ PLATFORMS: list[Platform] = [Platform.SWITCH]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Controler Relay from a config entry."""
     hub = ControlerRelayHub(
-        hass.loop, entry.data[CONF_PORT], entry.data[CONF_BAUD_RATE]
+        hass.loop,
+        entry.data[CONF_PORT],
+        entry.data[CONF_BAUD_RATE],
+        entry.data.get(CONF_PANEL_COUNT, DEFAULT_PANEL_COUNT),
     )
     await hub.async_connect()
 

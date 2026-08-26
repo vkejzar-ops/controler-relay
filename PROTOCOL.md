@@ -8,6 +8,17 @@ implement: the Home Assistant custom integration in
 ESP32 firmware (`esp32_bus_bridge.ino`) will implement the device side
 once the HA side is validated.
 
+## Multiple panels
+
+The ESP32 will eventually bridge **two** independent panels (each with
+its own bus-in/bus-out/isolate pins on the device side), sharing this
+one UART link back to the host. Every message therefore carries a
+`"panel"` field: a 1-based integer, `1` or `2`, identifying which
+panel the message is about. Only panel `1` is being brought up right
+now — the HA integration's config flow lets you set how many panels
+are active (default `1`), so panel `2` is added later purely by
+reconfiguring, with no protocol or code changes.
+
 ## Framing
 
 - **Baud rate:** 115200, 8N1 (matches `Serial.begin(115200)` already in
@@ -23,19 +34,22 @@ once the HA side is validated.
 
 ## Device -> Host messages
 
-### `state` — full panel state
+### `state` — full state for one panel
 
-Sent by the device whenever button/master state changes, and once in
-response to a `get_state` request (e.g. right after the host (re)connects).
+Sent by the device whenever that panel's button/master state changes,
+and once in response to a `get_state` request for that panel (e.g.
+right after the host (re)connects).
 
 ```json
-{"t": "state", "master": true, "slots": ["neutral", "odd", "even", "held", "neutral", "neutral"]}
+{"t": "state", "panel": 1, "master": true, "slots": ["neutral", "odd", "even", "held", "neutral", "neutral"]}
 ```
 
-- `master`: boolean, current master on/off state.
+- `panel`: integer, `1` or `2` — which panel this state is for.
+- `master`: boolean, current master on/off state for that panel.
 - `slots`: array of exactly 6 strings, one per slot (slot 1 first),
   each one of `"neutral"`, `"odd"`, `"even"`, `"held"` — matching the
-  `SlotState` enum in `esp32_bus_bridge.ino`.
+  `SlotState` enum in `esp32_bus_bridge.ino`. Each panel has its own
+  independent set of 6 slots.
 
 The host derives each of the 12 per-button booleans from `slots`:
 
@@ -47,39 +61,42 @@ even button on  <=>  slots[si] in {"even", "held"}
 
 ## Host -> Device messages
 
-### `get_state` — request a full state dump
+### `get_state` — request a full state dump for one panel
 
-Sent once right after the serial connection opens (and after any
-reconnect), so the host doesn't have to guess initial entity state.
+Sent once per active panel right after the serial connection opens
+(and after any reconnect), so the host doesn't have to guess initial
+entity state.
 
 ```json
-{"t": "get_state"}
+{"t": "get_state", "panel": 1}
 ```
 
-Device responds with a `state` message.
+Device responds with a `state` message for that panel.
 
 ### `set_button` — set one button's on/off state
 
 ```json
-{"t": "set_button", "button": 7, "on": true}
+{"t": "set_button", "panel": 1, "button": 7, "on": true}
 ```
 
-- `button`: integer 1-12.
+- `panel`: integer, `1` or `2`.
+- `button`: integer 1-12, within that panel.
 - `on`: desired boolean state for that button.
 
 The device is responsible for combining the two buttons of a slot
 (odd/even) into the correct `SlotState` (`neutral`/`odd`/`even`/`held`)
-and injecting the corresponding frame on the bus, then pushing an
-updated `state` message back once the new state is confirmed.
+and injecting the corresponding frame on that panel's bus, then
+pushing an updated `state` message back once the new state is
+confirmed.
 
 ### `set_master` — set the master on/off state
 
 ```json
-{"t": "set_master", "on": true}
+{"t": "set_master", "panel": 1, "on": true}
 ```
 
-Device injects the master-on or master-off frame accordingly, then
-pushes an updated `state` message back.
+Device injects the master-on or master-off frame on that panel's bus
+accordingly, then pushes an updated `state` message back.
 
 ## Reconnection
 

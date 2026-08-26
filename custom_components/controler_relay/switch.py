@@ -1,4 +1,4 @@
-"""Switch platform for Controler Relay: 12 buttons + 1 master."""
+"""Switch platform for Controler Relay: 12 buttons + 1 master, per panel."""
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
@@ -17,11 +17,13 @@ async def async_setup_entry(
     """Set up switch entities for a config entry."""
     hub: ControlerRelayHub = hass.data[DOMAIN][entry.entry_id]
 
-    entities: list[SwitchEntity] = [ControlerRelayMasterSwitch(hub, entry)]
-    entities.extend(
-        ControlerRelayButtonSwitch(hub, entry, button)
-        for button in range(1, NUM_BUTTONS + 1)
-    )
+    entities: list[SwitchEntity] = []
+    for panel in range(1, hub.panel_count + 1):
+        entities.append(ControlerRelayMasterSwitch(hub, entry, panel))
+        entities.extend(
+            ControlerRelayButtonSwitch(hub, entry, panel, button)
+            for button in range(1, NUM_BUTTONS + 1)
+        )
     async_add_entities(entities)
 
 
@@ -30,12 +32,13 @@ class ControlerRelayEntity(SwitchEntity):
 
     _attr_should_poll = False
 
-    def __init__(self, hub: ControlerRelayHub, entry: ConfigEntry) -> None:
+    def __init__(self, hub: ControlerRelayHub, entry: ConfigEntry, panel: int) -> None:
         self._hub = hub
+        self._panel = panel
         self._unsubscribe = None
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Controler Relay Panel",
+            identifiers={(DOMAIN, f"{entry.entry_id}_panel_{panel}")},
+            name=f"Controler Relay Panel {panel}",
             manufacturer="DIY",
             model="ESP32 Bus Bridge",
         )
@@ -53,51 +56,53 @@ class ControlerRelayEntity(SwitchEntity):
 
 
 class ControlerRelayMasterSwitch(ControlerRelayEntity):
-    """The panel's master on/off switch."""
+    """A panel's master on/off switch."""
 
     _attr_translation_key = "master"
 
-    def __init__(self, hub: ControlerRelayHub, entry: ConfigEntry) -> None:
-        super().__init__(hub, entry)
-        self._attr_unique_id = f"{entry.entry_id}_master"
+    def __init__(self, hub: ControlerRelayHub, entry: ConfigEntry, panel: int) -> None:
+        super().__init__(hub, entry, panel)
+        self._attr_unique_id = f"{entry.entry_id}_panel_{panel}_master"
         self._attr_name = "Master"
 
     @property
     def is_on(self) -> bool | None:
-        return self._hub.master_state
+        return self._hub.master_state[self._panel]
 
     @property
     def available(self) -> bool:
-        return self._hub.available and self._hub.master_state is not None
+        return self._hub.available and self._hub.master_state[self._panel] is not None
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._hub.async_set_master(True)
+        await self._hub.async_set_master(self._panel, True)
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._hub.async_set_master(False)
+        await self._hub.async_set_master(self._panel, False)
 
 
 class ControlerRelayButtonSwitch(ControlerRelayEntity):
-    """One of the panel's 12 buttons."""
+    """One of a panel's 12 buttons."""
 
     _attr_translation_key = "button"
 
-    def __init__(self, hub: ControlerRelayHub, entry: ConfigEntry, button: int) -> None:
-        super().__init__(hub, entry)
+    def __init__(
+        self, hub: ControlerRelayHub, entry: ConfigEntry, panel: int, button: int
+    ) -> None:
+        super().__init__(hub, entry, panel)
         self._button = button
-        self._attr_unique_id = f"{entry.entry_id}_button_{button}"
+        self._attr_unique_id = f"{entry.entry_id}_panel_{panel}_button_{button}"
         self._attr_name = f"Button {button}"
 
     @property
     def is_on(self) -> bool | None:
-        return self._hub.is_button_on(self._button)
+        return self._hub.is_button_on(self._panel, self._button)
 
     @property
     def available(self) -> bool:
-        return self._hub.available and self._hub.master_state is not None
+        return self._hub.available and self._hub.master_state[self._panel] is not None
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._hub.async_set_button(self._button, True)
+        await self._hub.async_set_button(self._panel, self._button, True)
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._hub.async_set_button(self._button, False)
+        await self._hub.async_set_button(self._panel, self._button, False)
