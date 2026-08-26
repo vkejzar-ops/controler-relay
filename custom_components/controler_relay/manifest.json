@@ -1,0 +1,10 @@
+{
+  "domain": "controler_relay",
+  "name": "Controler Relay",
+  "codeowners": ["@vkejzar-ops"],
+  "config_flow": true,
+  "documentation": "https://github.com/vkejzar-ops/controler-relay",
+  "iot_class": "local_push",
+  "requirements": ["pyserial-asyncio-fast>=0.13"],
+  "version": "0.1.0"
+}

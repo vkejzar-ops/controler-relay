@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Controler Relay",
+        "description": "Enter the serial device the ESP32 bridge's UART TX/RX pins are wired to.",
+        "data": {
+          "port": "Serial port",
+          "baud_rate": "Baud rate"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to open the serial port. Check the wiring and device path."
+    },
+    "abort": {
+      "already_configured": "This serial port is already configured."
+    }
+  }
+}
